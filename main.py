@@ -11,7 +11,10 @@ app = FastAPI(title="Duck Caption API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://duckcaptionfrontend.vercel.app",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
