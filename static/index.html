@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Duck Caption</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui; display: flex; height: 100vh; }
+        
+        /* Sidebar */
+        .sidebar { width: 250px; background: #1a1a1a; color: white; padding: 20px; overflow-y: auto; }
+        .job-item { padding: 10px; margin: 5px 0; background: #2a2a2a; border-radius: 4px; cursor: pointer; }
+        .job-item:hover { background: #3a3a3a; }
+        .job-item.active { background: #0066cc; }
+        
+        /* Main */
+        .main { flex: 1; display: flex; flex-direction: column; padding: 30px; }
+        
+        /* Drop zone */
+        .drop-zone { border: 2px dashed #ccc; border-radius: 8px; padding: 60px; text-align: center; 
+                     cursor: pointer; transition: all 0.3s; margin-bottom: 20px; }
+        .drop-zone:hover, .drop-zone.dragging { border-color: #0066cc; background: #f0f8ff; }
+        
+        /* SRT viewer */
+        .srt-container { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 20px; 
+                         overflow-y: auto; background: white; }
+        .srt-segment { margin: 15px 0; padding: 10px; border-left: 3px solid #0066cc; }
+        .srt-time { color: #666; font-size: 0.9em; margin-bottom: 5px; }
+        .srt-text { border: 1px solid #eee; padding: 8px; border-radius: 4px; min-height: 40px; }
+        .srt-text:focus { outline: 2px solid #0066cc; }
+        
+        /* Buttons */
+        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; 
+               background: #0066cc; color: white; font-size: 14px; margin: 10px 5px 0 0; }
+        .btn:hover { background: #0052a3; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        
+        .status { padding: 10px; margin: 10px 0; border-radius: 4px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2 style="margin-bottom: 20px;">Projets</h2>
+        <div id="jobs-list"></div>
+    </div>
+    
+    <div class="main">
+        <div class="drop-zone" id="dropZone">
+            <input type="file" id="fileInput" accept="audio/*,video/*" style="display:none">
+            <h3>📁 Déposez un fichier audio/vidéo</h3>
+            <p style="color: #666; margin-top: 10px;">ou cliquez pour sélectionner</p>
+        </div>
+        
+        <div id="status" class="status" style="display:none;"></div>
+        
+        <div class="srt-container" id="srtContainer" style="display:none;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                <h3>Sous-titres</h3>
+                <button class="btn" id="downloadBtn">⬇️ Télécharger SRT</button>
+            </div>
+            <div id="audioPlayer" style="margin-bottom: 20px;"></div>
+            <div id="srtContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const API = '';  // FastAPI sur même port
+        let currentJob = null;
+        let jobs = [];
+
+        // Drop zone
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragging');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragging');
+            handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+
+        async function handleFile(file) {
+            if (!file) return;
+            
+            showStatus('📤 Upload en cours...');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const resp = await fetch(`${API}/upload`, {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await resp.json();
+            currentJob = data.job_id;
+            
+            jobs.push({ id: data.job_id, filename: file.name, status: 'uploaded' });
+            renderJobs();
+            
+            // Charger info audio et afficher options
+            const info = await fetch(`${API}/audio_info/${data.job_id}`).then(r => r.json());
+            showStatus(`⏱️ Durée: ${info.duration_min} min | Coût estimé: $${info.estimated_cost}`);
+            showRangeSelector(data.job_id, info.duration_sec);
+        }
+
+        function showRangeSelector(jobId, totalDurationSec) {
+            const totalDurationMin = Math.floor(totalDurationSec / 60);
+            const html = `
+                <div style="margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
+                    <h4>Options de transcription</h4>
+                    <label style="display: block; margin: 10px 0;">
+                        <input type="checkbox" id="useRange"> Limiter à un intervalle
+                    </label>
+                    <div id="rangeInputs" style="display:none; margin-top:10px;">
+                        <input type="number" id="startTime" placeholder="Début (sec)" min="0" max="${totalDurationSec}" step="1" style="width:120px; padding:5px; margin-right:10px;">
+                        <input type="number" id="endTime" placeholder="Fin (sec)" min="0" max="${totalDurationSec}" step="1" style="width:120px; padding:5px;">
+                        <small style="display:block; color:#666; margin-top:5px;">Total: ${totalDurationMin} min</small>
+                    </div>
+                    <button class="btn" onclick="launchTranscription('${jobId}')" style="margin-top:15px;">🚀 Lancer transcription</button>
+                </div>
+            `;
+            document.getElementById('status').innerHTML = html;
+            
+            document.getElementById('useRange').addEventListener('change', (e) => {
+                document.getElementById('rangeInputs').style.display = e.target.checked ? 'block' : 'none';
+            });
+        }
+
+        async function launchTranscription(jobId) {
+            const useRange = document.getElementById('useRange')?.checked || false;
+            let params = {};
+            
+            if (useRange) {
+                const start = document.getElementById('startTime').value;
+                const end = document.getElementById('endTime').value;
+                if (start) params.start_time = parseFloat(start);
+                if (end) params.end_time = parseFloat(end);
+            }
+            
+            showStatus('🤖 Transcription + correction IA...');
+            const query = new URLSearchParams(params).toString();
+            await fetch(`${API}/generate_srt/${jobId}?${query}`, { method: 'POST' });
+            
+            await loadJob(jobId);
+        }
+
+        async function loadJob(jobId) {
+            const resp = await fetch(`${API}/job/${jobId}`);
+            const job = await resp.json();
+            
+            if (job.error) {
+                showStatus(`❌ Erreur: ${job.error}`);
+                return;
+            }
+            
+            if (job.srt_url) {
+                showStatus('✅ Prêt !');
+                
+                // Lecteur audio
+                const audioUrl = `${API}/audio/${jobId}`;
+                document.getElementById('audioPlayer').innerHTML = `
+                    <audio controls style="width: 100%; margin: 15px 0;">
+                        <source src="${audioUrl}" type="audio/wav">
+                        Votre navigateur ne supporte pas l'élément audio.
+                    </audio>
+                `;
+                
+                await loadSRT(job.srt_url);
+            }
+            
+            // Update job in list
+            const idx = jobs.findIndex(j => j.id === jobId);
+            if (idx >= 0) jobs[idx] = job;
+            renderJobs();
+        }
+
+        async function loadSRT(url) {
+            const resp = await fetch(url);
+            const text = await resp.text();
+            
+            const segments = parseSRT(text);
+            renderSRT(segments);
+            
+            document.getElementById('srtContainer').style.display = 'block';
+        }
+
+        function parseSRT(text) {
+            const blocks = text.trim().split('\n\n');
+            return blocks.map(block => {
+                const lines = block.split('\n');
+                return {
+                    index: lines[0],
+                    time: lines[1],
+                    text: lines.slice(2).join('\n')
+                };
+            });
+        }
+
+        function renderSRT(segments) {
+            const html = segments.map((seg, i) => `
+                <div class="srt-segment">
+                    <div class="srt-time">${seg.time}</div>
+                    <div class="srt-text" contenteditable="true" data-index="${i}">${seg.text}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('srtContent').innerHTML = html;
+            
+            // Ajouter sélecteur langues après affichage SRT
+            const langHtml = `
+                <div style="margin: 15px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background: #f9f9f9;">
+                    <h4>🌍 Traduire en :</h4>
+                    <div style="margin: 10px 0;">
+                        <label style="margin-right: 15px;"><input type="checkbox" value="en"> Anglais</label>
+                        <label style="margin-right: 15px;"><input type="checkbox" value="nl"> Néerlandais</label>
+                        <label style="margin-right: 15px;"><input type="checkbox" value="es"> Espagnol</label>
+                        <label style="margin-right: 15px;"><input type="checkbox" value="de"> Allemand</label>
+                    </div>
+                    <button class="btn" onclick="translateSRT()">🌍 Traduire</button>
+                    <div id="translations" style="margin-top: 15px;"></div>
+                </div>
+            `;
+            document.getElementById('srtContent').insertAdjacentHTML('afterbegin', langHtml);
+        }
+        
+        async function translateSRT() {
+            const checked = Array.from(document.querySelectorAll('input[type=checkbox]:checked'))
+                .map(c => c.value);
+            
+            if (!checked.length) {
+                showStatus('⚠️ Sélectionnez au moins une langue');
+                return;
+            }
+            
+            showStatus('🌍 Traduction en cours...');
+            
+            try {
+                const resp = await fetch(`${API}/translate_srt/${currentJob}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({languages: checked})
+                });
+                
+                const data = await resp.json();
+                
+                if (data.error) {
+                    showStatus(`❌ Erreur: ${data.error}`);
+                    return;
+                }
+                
+                // Afficher liens téléchargement
+                let html = '<h4 style="margin-top: 10px;">✅ Traductions disponibles :</h4>';
+                for (const [lang, url] of Object.entries(data.translations)) {
+                    html += `<a href="${url}" class="btn" style="margin: 5px;" target="_blank">⬇️ ${lang.toUpperCase()}</a> `;
+                }
+                document.getElementById('translations').innerHTML = html;
+                showStatus('✅ Traductions terminées !');
+            } catch (e) {
+                showStatus(`❌ Erreur: ${e.message}`);
+            }
+        }
+
+        function renderJobs() {
+            const html = jobs.map(j => `
+                <div class="job-item ${j.id === currentJob ? 'active' : ''}" 
+                     onclick="loadJob('${j.id}')">
+                    <div style="font-weight: bold;">${j.filename}</div>
+                    <div style="font-size: 0.85em; color: #aaa;">${j.status}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('jobs-list').innerHTML = html || '<p style="color:#666;">Aucun projet</p>';
+        }
+
+        function showStatus(msg) {
+            const status = document.getElementById('status');
+            status.textContent = msg;
+            status.style.display = 'block';
+        }
+
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            const segments = Array.from(document.querySelectorAll('.srt-segment')).map(seg => {
+                const time = seg.querySelector('.srt-time').textContent;
+                const text = seg.querySelector('.srt-text').textContent;
+                const index = seg.querySelector('.srt-text').dataset.index;
+                return `${parseInt(index) + 1}\n${time}\n${text}\n`;
+            });
+            
+            const blob = new Blob([segments.join('\n')], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'subtitles.srt';
+            a.click();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Secrets
+.env
+*.env
+core/**/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+*.egg-info/
+.eggs/
+
+# Fichiers temporaires
+tmp/
+logs/
+*.log
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
