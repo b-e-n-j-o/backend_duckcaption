@@ -8,6 +8,7 @@ import json
 import requests
 import subprocess
 import math
+import os
 
 from core.supabase import upload_file
 from core.jobs import supabase
@@ -145,6 +146,10 @@ def generate_srt(
     end_time: float = Query(None, description="Fin en secondes"),
     max_words: int = Query(None),
     max_chars: int = Query(None),
+    max_chars_per_line: int = Query(
+        42,
+        description="Nombre max de caractères par ligne de sous-titres (Scribe v2)",
+    ),
     engine: str = Query(
         "whisper_gemini",
         description="Moteur: 'whisper_gemini' ou 'scribe_v2'",
@@ -190,6 +195,9 @@ def generate_srt(
         )
         
         # Router vers le bon moteur
+        detected_lang = None
+        srt_filename = "subtitles.srt"
+
         if engine == "scribe_v2":
             # Parser keyterms
             keyterms_list = None
@@ -202,11 +210,18 @@ def generate_srt(
                 output_path=tmp_srt,
                 max_words=max_words,
                 max_chars=max_chars,
+                max_chars_per_line=max_chars_per_line,
                 keyterms=keyterms_list,
                 start_time=start_time,
                 end_time=end_time
             )
             log.info(f"📊 Scribe v2 stats: {stats}")
+
+            # Nom du fichier: audio_original_langue.srt
+            original_filename = job.get("filename", "subtitles")
+            base_name = os.path.splitext(original_filename)[0]
+            detected_lang = stats.get("language", "unknown")
+            srt_filename = f"{base_name}_{detected_lang}.srt"
         else:
             # Pipeline classique Whisper + Gemini
             process_stt(
@@ -227,19 +242,29 @@ def generate_srt(
                 "job_id": job_id,
                 "dry_run": True,
                 "engine": engine,
-                "srt": srt_content
+                "language": detected_lang,
+                "filename": srt_filename,
+                "srt": srt_content,
             }
         
-        dest = f"{job_id}/subtitles.srt"
+        dest = f"{job_id}/{srt_filename}"
         srt_url = upload_file(str(tmp_srt), dest)
         
-        update_job(job_id, srt_url=srt_url, status="srt_ready")
+        # On ne stocke pas language/srt_filename en base (colonnes absentes),
+        # on les renvoie seulement dans la réponse HTTP.
+        update_job(
+            job_id,
+            srt_url=srt_url,
+            status="srt_ready",
+        )
         
         log.info(f"✅ SRT ready for {job_id} (engine={engine})")
         
         return {
             "job_id": job_id,
             "engine": engine,
+            "language": detected_lang,
+            "filename": srt_filename,
             "srt_url": srt_url
         }
         
@@ -302,7 +327,8 @@ def translate_srt_endpoint(job_id: str, request: TranslateRequest):
             tmp_path = TMP_DIR / f"{job_id}_{lang}.srt"
             tmp_path.write_text(translated, encoding="utf-8")
 
-            dest = f"{job_id}/subtitles_{lang}.srt"
+            base_name = os.path.splitext(job.get("filename", "subtitles"))[0]
+            dest = f"{job_id}/{base_name}_{lang}.srt"
             url = upload_file(str(tmp_path), dest)
             translations[lang] = url
 

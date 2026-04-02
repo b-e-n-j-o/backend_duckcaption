@@ -10,6 +10,7 @@ Ce module fournit une alternative à Whisper+Gemini avec:
 import os
 import json
 import time
+import re
 import requests
 from pathlib import Path
 from typing import List, Optional
@@ -19,6 +20,63 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
+
+def remove_repetitions(text: str) -> str:
+    """
+    Supprime les répétitions/hésitations.
+    'le, le, le plus' → 'le plus'
+    'je je veux' → 'je veux'
+    """
+    # Pattern: mot répété 2+ fois avec virgules/espaces entre
+    # Gère: "le, le, le" / "je je je" / "euh, euh"
+    pattern = r"\b(\w+)(?:[,\s]+\1)+\b"
+    cleaned = re.sub(pattern, r"\1", text, flags=re.IGNORECASE)
+
+    # Nettoyer les espaces multiples
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    # Nettoyer les virgules orphelines ", ," ou ", , ,"
+    cleaned = re.sub(r"(?:,\s*)+,", ",", cleaned)
+    cleaned = re.sub(r"\s+,", ",", cleaned)
+
+    return cleaned
+
+
+def split_to_two_lines(text: str, max_chars_per_line: int = 42) -> str:
+    """
+    Coupe le texte en 2 lignes équilibrées si trop long.
+    Standard sous-titrage: ~42 caractères par ligne max.
+    """
+    text = text.strip()
+
+    # Si assez court, pas besoin de couper
+    if len(text) <= max_chars_per_line:
+        return text
+
+    words = text.split()
+    if len(words) < 2:
+        return text
+
+    # Trouver le meilleur point de coupure (proche du milieu)
+    total_len = len(text)
+    target = total_len // 2
+
+    current_len = 0
+    best_split_idx = 0
+    best_diff = total_len
+
+    for i, word in enumerate(words[:-1]):  # Pas sur le dernier mot
+        current_len += len(word) + 1  # +1 pour l'espace
+        diff = abs(current_len - target)
+        if diff < best_diff:
+            best_diff = diff
+            best_split_idx = i + 1
+
+    line1 = " ".join(words[:best_split_idx])
+    line2 = " ".join(words[best_split_idx:])
+
+    return f"{line1}\n{line2}"
 
 
 # ============================================================
@@ -59,7 +117,13 @@ class Segment:
                 else:
                     result.append(word.text)
             # audio_event ignorés (ex: [laughter], [music])
-        return " ".join(result)
+
+        raw_text = " ".join(result)
+
+        # Supprimer les hésitations/répétitions
+        cleaned = remove_repetitions(raw_text)
+
+        return cleaned
     
     @property
     def word_count(self) -> int:
@@ -143,6 +207,7 @@ def build_segments(
     words_data: List[dict],
     max_words: Optional[int] = None,
     max_chars: Optional[int] = None,
+    max_chars_per_line: int = 42,
     max_segment_duration: float = 7.0
 ) -> List[Segment]:
     """
@@ -169,22 +234,27 @@ def build_segments(
     def should_break(word: Word) -> bool:
         if not current_words:
             return False
-        
+
         word_count = len([w for w in current_words if w.type == "word"])
         duration = current_words[-1].end - current_words[0].start
-        
+
+        # Couper après ponctuation finale
+        last_text = current_words[-1].text.strip()
+        if last_text.endswith((".", "!", "?")):
+            return True
+
         if max_words and word_count >= max_words:
             return True
-        
+
         if max_chars:
             temp_seg = Segment(words=current_words)
             new_len = len(temp_seg.text) + len(word.text) + 1
             if new_len > max_chars:
                 return True
-        
+
         if duration >= max_segment_duration:
             return True
-        
+
         return False
     
     for word in words:
@@ -205,7 +275,7 @@ def build_segments(
     return segments
 
 
-def segments_to_srt(segments: List[Segment]) -> str:
+def segments_to_srt(segments: List[Segment], max_chars_per_line: int = 42) -> str:
     """Convertit les segments en format SRT."""
     def fmt_time(seconds: float) -> str:
         h = int(seconds // 3600)
@@ -216,11 +286,16 @@ def segments_to_srt(segments: List[Segment]) -> str:
     
     lines = []
     for i, seg in enumerate(segments, 1):
+        text = seg.text.strip()
+
+        # Appliquer le split 2 lignes si nécessaire
+        text = split_to_two_lines(text, max_chars_per_line)
+
         lines.append(str(i))
         lines.append(f"{fmt_time(seg.start)} --> {fmt_time(seg.end)}")
-        lines.append(seg.text.strip())
+        lines.append(text)
         lines.append("")
-    
+
     return "\n".join(lines)
 
 
@@ -233,6 +308,7 @@ def process_scribe_v2(
     output_path: Path,
     max_words: Optional[int] = None,
     max_chars: Optional[int] = None,
+    max_chars_per_line: int = 42,
     keyterms: Optional[List[str]] = None,
     language_code: Optional[str] = None,
     start_time: Optional[float] = None,
@@ -289,18 +365,21 @@ def process_scribe_v2(
         segments = build_segments(
             words,
             max_words=max_words,
-            max_chars=max_chars
+            max_chars=max_chars,
+            max_chars_per_line=max_chars_per_line,
         )
         
-        # Générer SRT
-        srt_content = segments_to_srt(segments)
+        # Générer SRT avec split 2 lignes
+        srt_content = segments_to_srt(segments, max_chars_per_line)
         output_path.write_text(srt_content, encoding="utf-8")
         
+        detected_language = result.get("language_code", "unknown")
+
         return {
             "segments_count": len(segments),
             "words_count": len([w for w in words if w.get("type") == "word"]),
             "duration": words[-1]["end"] if words else 0,
-            "language": result.get("language_code"),
+            "language": detected_language,
             "engine": "scribe_v2"
         }
         
