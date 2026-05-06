@@ -213,7 +213,8 @@ def generate_srt(
                 max_chars_per_line=max_chars_per_line,
                 keyterms=keyterms_list,
                 start_time=start_time,
-                end_time=end_time
+                end_time=end_time,
+                job_id=job_id,
             )
             log.info(f"📊 Scribe v2 stats: {stats}")
 

@@ -1,3 +1,19 @@
+"""
+Translator - Module de traduction SRT
+
+Ce module traduit un SRT en gardant les timestamps.
+
+Objectifs:
+- Traduction littérale (pas de réarrangement entre segments)
+- Respect des timings (chaque segment traduit correspond au même moment)
+- Support des contraintes max_words / max_chars
+
+Trois modes disponibles:
+1. SEGMENT_BY_SEGMENT: Traduit chaque segment individuellement (plus lent, plus fidèle)
+2. BATCH_STRICT: Traduit en batch avec contraintes strictes (équilibré)
+3. WORD_LEVEL: Exploite les timestamps mot-par-mot de Scribe v2 (le plus précis)
+"""
+
 from dotenv import load_dotenv
 load_dotenv()  # ← EN PREMIER
 

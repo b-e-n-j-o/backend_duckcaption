@@ -11,6 +11,7 @@ import os
 import json
 import time
 import re
+import logging
 import requests
 from pathlib import Path
 from typing import List, Optional
@@ -20,6 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+log = logging.getLogger(__name__)
 
 
 def remove_repetitions(text: str) -> str:
@@ -312,7 +314,9 @@ def process_scribe_v2(
     keyterms: Optional[List[str]] = None,
     language_code: Optional[str] = None,
     start_time: Optional[float] = None,
-    end_time: Optional[float] = None
+    end_time: Optional[float] = None,
+    clean: bool = True,
+    job_id: Optional[str] = None,
 ) -> dict:
     """
     Pipeline complet Scribe v2: audio → SRT
@@ -327,6 +331,9 @@ def process_scribe_v2(
         start_time: Début en secondes (pour trim)
         end_time: Fin en secondes (pour trim)
     
+        clean: Active le nettoyage LLM post-transcription
+        job_id: ID de job pour tracking des coûts du cleaner
+
     Returns:
         Dict avec stats: segments_count, duration, words_count
     """
@@ -369,11 +376,24 @@ def process_scribe_v2(
             max_chars_per_line=max_chars_per_line,
         )
         
+        detected_language = result.get("language_code", "unknown")
+
         # Générer SRT avec split 2 lignes
         srt_content = segments_to_srt(segments, max_chars_per_line)
+
+        # Nettoyage LLM (optionnel, activé par défaut)
+        if clean:
+            from core.cleaner_srt import clean_srt_segments
+            log.info(f"🧹 Cleaning SRT ({len(segments)} segments, lang={detected_language})")
+            t0 = time.time()
+            srt_content = clean_srt_segments(
+                srt_content,
+                language=detected_language,
+                job_id=job_id,
+            )
+            log.info(f"✅ Cleaning done in {time.time() - t0:.1f}s")
+
         output_path.write_text(srt_content, encoding="utf-8")
-        
-        detected_language = result.get("language_code", "unknown")
 
         return {
             "segments_count": len(segments),
