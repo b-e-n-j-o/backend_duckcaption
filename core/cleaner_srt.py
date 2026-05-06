@@ -52,9 +52,11 @@ def clean_srt_segments(srt_content: str, language: str = "fr", job_id: str = Non
     texts = [seg["text"] for seg in segments]
 
     model = genai.GenerativeModel(
-        "gemini-2.5-flash-lite",
+        "gemini-3.1-flash-lite-preview",
         generation_config={"response_mime_type": "application/json"}
     )
+
+    numbered = {str(i): t for i, t in enumerate(texts)}
 
     prompt = f"""
 Tu corriges des sous-titres issus d'une transcription automatique de la parole ({language}).
@@ -80,18 +82,20 @@ NE PAS TOUCHER :
 - La ponctuation existante
 - Les retours à la ligne internes (\\n) dans un segment
 
-Format de sortie STRICT — un tableau JSON de strings :
-["segment nettoyé 1", "segment nettoyé 2", ...]
+Format de sortie STRICT — un objet JSON avec des clés indexées :
+{{"0": "segment 0 nettoyé", "1": "segment 1 nettoyé", ...}}
 
 CRITICAL:
-- You MUST return EXACTLY {len(texts)} items in the JSON array.
+- You MUST return EXACTLY {len(texts)} keys in the JSON object.
+- Keys MUST be strings from "0" to "{len(texts) - 1}".
 - Even if two segments seem to belong together, keep them as separate items.
-- Each array index MUST correspond to the same index in the input.
-- Example: if input has 3 segments, output must be exactly:
-  ["cleaned segment 1", "cleaned segment 2", "cleaned segment 3"]
+- Each key MUST correspond to the same input segment index.
+- Incomplete segments are NORMAL in subtitles; keep them incomplete if needed.
+- Example (3 segments):
+  {{"0": "cleaned segment 0", "1": "cleaned segment 1", "2": "cleaned segment 2"}}
 
 Segments à nettoyer :
-{json.dumps(texts, ensure_ascii=False)}
+{json.dumps(numbered, ensure_ascii=False)}
 """
 
     cleaned = None
@@ -104,21 +108,25 @@ Segments à nettoyer :
         last_resp_preview = resp.text[:200]
 
         try:
-            candidate = json.loads(resp.text)
-            if isinstance(candidate, list) and len(candidate) == len(texts):
-                cleaned = candidate
-                break
+            result_dict = json.loads(resp.text)
+            if isinstance(result_dict, dict):
+                expected_keys = [str(i) for i in range(len(texts))]
+                if all(k in result_dict for k in expected_keys):
+                    cleaned = [str(result_dict[str(i)]) for i in range(len(texts))]
+                    break
+                got = f"missing keys (got {len(result_dict)} keys)"
+            else:
+                got = "non-dict"
 
-            got = len(candidate) if isinstance(candidate, list) else "non-list"
             if attempt == 0:
                 print(
-                    f"⚠️ Attempt {attempt + 1}: got {got} segments, "
-                    f"expected {len(texts)}, retrying..."
+                    f"⚠️ Attempt {attempt + 1}: invalid structure ({got}), "
+                    f"expected keys 0..{len(texts) - 1}, retrying..."
                 )
             else:
                 print(
-                    f"⚠️ Attempt {attempt + 1}: got {got} segments, "
-                    f"expected {len(texts)}, fallback."
+                    f"⚠️ Attempt {attempt + 1}: invalid structure ({got}), "
+                    f"expected keys 0..{len(texts) - 1}, fallback."
                 )
         except Exception as e:
             if attempt == 0:
