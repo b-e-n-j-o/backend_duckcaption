@@ -51,7 +51,7 @@ def translate_srt_segments(srt_content: str, target_lang: str, job_id: str = Non
     
     # Traduire en batch
     model = genai.GenerativeModel(
-        "gemini-2.5-flash",
+        "gemini-3.1-flash-lite-preview",
         generation_config={"response_mime_type": "application/json"}
     )
     prompt = f"""
@@ -97,7 +97,7 @@ def translate_srt_segments(srt_content: str, target_lang: str, job_id: str = Non
     
     # Compter tokens précis
     if job_id:
-        from core.token_counter import calculate_costs, add_cost_to_job
+        from core.token_counter import calculate_model_text_costs, add_cost_component_to_job
         
         # Compter tokens input (prompt)
         try:
@@ -109,10 +109,18 @@ def translate_srt_segments(srt_content: str, target_lang: str, job_id: str = Non
         # Compter tokens output (traductions)
         output_tokens = sum(len(t.split()) for t in translated) * 1.3  # Estimation
         
-        # Calculer coût
-        costs = calculate_costs(0, input_tokens, output_tokens)
-        add_cost_to_job(job_id, costs["total"])
-        print(f"💰 Coût traduction {target_lang}: ${costs['total']}")
+        # Calculer coût (Gemini 3.1 Flash-Lite Preview)
+        costs = calculate_model_text_costs(
+            "gemini-3.1-flash-lite-preview",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+        add_cost_component_to_job(job_id, "translation_gemini", costs["total"])
+        print(
+            f"💰 Coût traduction {target_lang}: ${costs['total']:.12f} "
+            f"(in={costs['input_tokens']} @ ${costs['input_rate_per_1m']}/1M, "
+            f"out={costs['output_tokens']} @ ${costs['output_rate_per_1m']}/1M)"
+        )
     
     # Reconstruire SRT
     output = []

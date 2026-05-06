@@ -11,17 +11,17 @@ import os
 import json
 import time
 import re
-import logging
 import requests
 from pathlib import Path
 from typing import List, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
+from core.logger import get_logger
 
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-log = logging.getLogger(__name__)
+log = get_logger("scribe_v2_engine")
 
 
 def remove_repetitions(text: str) -> str:
@@ -338,6 +338,11 @@ def process_scribe_v2(
         Dict avec stats: segments_count, duration, words_count
     """
     import subprocess
+    from core.token_counter import (
+        calculate_elevenlabs_transcription_cost,
+        add_cost_component_to_job,
+        get_audio_duration,
+    )
     
     working_audio = audio_path
     
@@ -353,6 +358,8 @@ def process_scribe_v2(
         subprocess.run(cmd, capture_output=True)
     
     try:
+        transcription_duration_sec = get_audio_duration(working_audio)
+
         # Transcrire
         result = transcribe_audio(
             working_audio,
@@ -377,6 +384,19 @@ def process_scribe_v2(
         )
         
         detected_language = result.get("language_code", "unknown")
+
+        if job_id:
+            eleven_cost = calculate_elevenlabs_transcription_cost(
+                transcription_duration_sec,
+                keyterms_enabled=bool(keyterms),
+            )
+            add_cost_component_to_job(job_id, "transcription_elevenlabs", eleven_cost["total"])
+            log.info(
+                f"💰 ElevenLabs transcription cost: ${eleven_cost['total']:.12f} "
+                f"(duration={eleven_cost['duration_sec']:.2f}s, "
+                f"base=${eleven_cost['base_cost']:.12f} @ ${eleven_cost['base_rate_per_hour_usd']}/h, "
+                f"keyterm=${eleven_cost['keyterm_cost']:.12f} @ ${eleven_cost['keyterm_rate_per_hour_usd']}/h)"
+            )
 
         # Générer SRT avec split 2 lignes
         srt_content = segments_to_srt(segments, max_chars_per_line)

@@ -330,6 +330,23 @@ def translate_srt_endpoint(job_id: str, request: TranslateRequest):
                     max_words=request.max_words,
                     max_chars=request.max_chars,
                 )
+                # Coût traduction strict (estimateur léger à partir du contenu)
+                try:
+                    from core.token_counter import calculate_model_text_costs, add_cost_component_to_job
+                    input_tokens = len(original_srt.split()) * 1.3
+                    output_tokens = len(translated.split()) * 1.3
+                    costs = calculate_model_text_costs(
+                        "gemini-3.1-flash-lite-preview",
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
+                    add_cost_component_to_job(job_id, "translation_gemini", costs["total"])
+                    log.info(
+                        f"💰 Translation cost ({lang}, strict): ${costs['total']:.12f} "
+                        f"(estimated tokens in={int(input_tokens)}, out={int(output_tokens)})"
+                    )
+                except Exception as cost_err:
+                    log.warning(f"⚠️ Translation cost tracking failed ({lang}, strict): {cost_err}")
             else:
                 translated = translate_srt_segments(
                     original_srt,

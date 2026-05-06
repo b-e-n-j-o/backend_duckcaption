@@ -142,15 +142,23 @@ Segments à nettoyer :
     # Tracking coûts — identique à la traduction
     if job_id:
         try:
-            from core.token_counter import calculate_costs, add_cost_to_job
+            from core.token_counter import calculate_model_text_costs, add_cost_component_to_job
             try:
                 input_tokens = model.count_tokens([prompt]).total_tokens
             except:
                 input_tokens = len(prompt.split()) * 1.3
             output_tokens = sum(len(t.split()) for t in cleaned) * 1.3
-            costs = calculate_costs(0, input_tokens, output_tokens)
-            add_cost_to_job(job_id, costs["total"])
-            print(f"💰 Coût cleaning: ${costs['total']}")
+            costs = calculate_model_text_costs(
+                "gemini-3.1-flash-lite-preview",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            add_cost_component_to_job(job_id, "cleaning_gemini", costs["total"])
+            print(
+                f"💰 Coût cleaning: ${costs['total']} "
+                f"(model={costs['model']}, in={costs['input_tokens']} @ ${costs['input_rate_per_1m']}/1M, "
+                f"out={costs['output_tokens']} @ ${costs['output_rate_per_1m']}/1M)"
+            )
         except Exception as e:
             print(f"⚠️ Cost tracking failed: {e}")
 
