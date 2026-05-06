@@ -9,6 +9,8 @@ import requests
 import subprocess
 import math
 import os
+import re
+import unicodedata
 
 from core.supabase import upload_file
 from core.jobs import supabase
@@ -41,6 +43,16 @@ TMP_DIR = BASE_DIR / "tmp"
 TMP_DIR.mkdir(exist_ok=True)
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
+
+
+def slugify_filename(name: str) -> str:
+    """
+    Convertit un nom de fichier en forme ASCII safe pour Supabase Storage.
+    """
+    normalized = unicodedata.normalize("NFKD", name)
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^\w\-.]", "_", ascii_name)
+    return slug.strip("._") or "subtitles"
 
 
 # ============================================================
@@ -220,7 +232,7 @@ def generate_srt(
 
             # Nom du fichier: audio_original_langue.srt
             original_filename = job.get("filename", "subtitles")
-            base_name = os.path.splitext(original_filename)[0]
+            base_name = slugify_filename(os.path.splitext(original_filename)[0])
             detected_lang = stats.get("language", "unknown")
             srt_filename = f"{base_name}_{detected_lang}.srt"
         else:

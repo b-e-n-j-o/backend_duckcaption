@@ -83,24 +83,51 @@ NE PAS TOUCHER :
 Format de sortie STRICT — un tableau JSON de strings :
 ["segment nettoyé 1", "segment nettoyé 2", ...]
 
+CRITICAL:
+- You MUST return EXACTLY {len(texts)} items in the JSON array.
+- Even if two segments seem to belong together, keep them as separate items.
+- Each array index MUST correspond to the same index in the input.
+- Example: if input has 3 segments, output must be exactly:
+  ["cleaned segment 1", "cleaned segment 2", "cleaned segment 3"]
+
 Segments à nettoyer :
 {json.dumps(texts, ensure_ascii=False)}
 """
 
-    print(f"🧹 Cleaner: {len(texts)} segments → Gemini...")
-    resp = model.generate_content([prompt])
-    print("✅ Cleaner: réponse reçue")
+    cleaned = None
+    last_resp_preview = ""
 
-    try:
-        cleaned = json.loads(resp.text)
-        if not isinstance(cleaned, list) or len(cleaned) != len(texts):
-            raise ValueError(
-                f"Expected {len(texts)} segments, got "
-                f"{len(cleaned) if isinstance(cleaned, list) else 'non-list'}"
-            )
-    except Exception as e:
-        print(f"⚠️ Cleaning parsing failed: {e}")
-        print(f"Response: {resp.text[:200]}")
+    for attempt in range(2):
+        print(f"🧹 Cleaner: {len(texts)} segments → Gemini... (attempt {attempt + 1}/2)")
+        resp = model.generate_content([prompt])
+        print("✅ Cleaner: réponse reçue")
+        last_resp_preview = resp.text[:200]
+
+        try:
+            candidate = json.loads(resp.text)
+            if isinstance(candidate, list) and len(candidate) == len(texts):
+                cleaned = candidate
+                break
+
+            got = len(candidate) if isinstance(candidate, list) else "non-list"
+            if attempt == 0:
+                print(
+                    f"⚠️ Attempt {attempt + 1}: got {got} segments, "
+                    f"expected {len(texts)}, retrying..."
+                )
+            else:
+                print(
+                    f"⚠️ Attempt {attempt + 1}: got {got} segments, "
+                    f"expected {len(texts)}, fallback."
+                )
+        except Exception as e:
+            if attempt == 0:
+                print(f"⚠️ Attempt {attempt + 1}: parse error: {e}; retrying...")
+            else:
+                print(f"⚠️ Attempt {attempt + 1}: parse error: {e}; fallback.")
+
+    if cleaned is None:
+        print(f"Response: {last_resp_preview}")
         # Fallback : retourner l'original non modifié plutôt que planter
         return srt_content
 
