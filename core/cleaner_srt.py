@@ -52,7 +52,7 @@ def clean_srt_segments(srt_content: str, language: str = "fr", job_id: str = Non
     texts = [seg["text"] for seg in segments]
 
     model = genai.GenerativeModel(
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
         generation_config={"response_mime_type": "application/json"}
     )
 
@@ -149,7 +149,7 @@ Segments à nettoyer :
                 input_tokens = len(prompt.split()) * 1.3
             output_tokens = sum(len(t.split()) for t in cleaned) * 1.3
             costs = calculate_model_text_costs(
-                "gemini-3.1-flash-lite-preview",
+                "gemini-3.1-flash-lite",
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
             )
