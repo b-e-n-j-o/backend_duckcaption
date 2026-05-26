@@ -336,7 +336,7 @@ def translate_srt_endpoint(job_id: str, request: TranslateRequest):
                     input_tokens = len(original_srt.split()) * 1.3
                     output_tokens = len(translated.split()) * 1.3
                     costs = calculate_model_text_costs(
-                        "gemini-3.1-flash-lite-preview",
+                        "gemini-3.1-flash-lite",
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                     )

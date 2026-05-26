@@ -18,7 +18,7 @@ ELEVENLABS_KEYTERM_ADDON_PER_HOUR_USD = 0.080
 # Tarifs text in/out par modèle Gemini (USD / 1M tokens).
 # Valeurs en dur selon la grille tarifaire publique.
 MODEL_TEXT_PRICING_PER_1M = {
-    "gemini-3.1-flash-lite-preview": {
+    "gemini-3.1-flash-lite": {
         # Input texte/image/video : $0.25 / 1M tokens
         "input": 0.25,
         # Output (thinking tokens inclus) : $1.50 / 1M tokens

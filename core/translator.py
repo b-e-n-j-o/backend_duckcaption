@@ -51,7 +51,7 @@ def translate_srt_segments(srt_content: str, target_lang: str, job_id: str = Non
     
     # Traduire en batch
     model = genai.GenerativeModel(
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
         generation_config={"response_mime_type": "application/json"}
     )
     prompt = f"""
@@ -109,9 +109,9 @@ def translate_srt_segments(srt_content: str, target_lang: str, job_id: str = Non
         # Compter tokens output (traductions)
         output_tokens = sum(len(t.split()) for t in translated) * 1.3  # Estimation
         
-        # Calculer coût (Gemini 3.1 Flash-Lite Preview)
+        # Calculer coût (Gemini 3.1 Flash-Lite)
         costs = calculate_model_text_costs(
-            "gemini-3.1-flash-lite-preview",
+            "gemini-3.1-flash-lite",
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
