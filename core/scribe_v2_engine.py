@@ -277,6 +277,27 @@ def build_segments(
     return segments
 
 
+def fill_gaps(segments: List[Segment], gap_threshold: float = 1.5) -> List[Segment]:
+    """
+    Étend le end de chaque segment jusqu'au start du suivant,
+    pour éviter les frames vides dans Premiere Pro.
+    Ne modifie pas les pauses longues (> gap_threshold secondes).
+    """
+    for i in range(len(segments) - 1):
+        current = segments[i]
+        next_seg = segments[i + 1]
+        gap = next_seg.start - current.end
+        if 0 < gap <= gap_threshold:
+            last = current.words[-1]
+            current.words[-1] = Word(
+                text=last.text,
+                start=last.start,
+                end=next_seg.start,
+                type=last.type,
+            )
+    return segments
+
+
 def segments_to_srt(segments: List[Segment], max_chars_per_line: int = 42) -> str:
     """Convertit les segments en format SRT."""
     def fmt_time(seconds: float) -> str:
@@ -382,7 +403,8 @@ def process_scribe_v2(
             max_chars=max_chars,
             max_chars_per_line=max_chars_per_line,
         )
-        
+        segments = fill_gaps(segments)
+
         detected_language = result.get("language_code", "unknown")
 
         if job_id:
