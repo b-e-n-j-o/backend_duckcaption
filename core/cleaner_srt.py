@@ -94,6 +94,8 @@ CRITICAL:
 - Example (3 segments):
   {{"0": "cleaned segment 0", "1": "cleaned segment 1", "2": "cleaned segment 2"}}
 
+- Vérifie bien si le point final du dernier segment est bien placé et présent, rajoute le s'il est manquant
+
 Segments à nettoyer :
 {json.dumps(numbered, ensure_ascii=False)}
 """
