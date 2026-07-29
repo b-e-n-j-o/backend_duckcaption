@@ -263,12 +263,12 @@ def generate_srt(
         dest = f"{job_id}/{srt_filename}"
         srt_url = upload_file(str(tmp_srt), dest)
         
-        # On ne stocke pas language/srt_filename en base (colonnes absentes),
-        # on les renvoie seulement dans la réponse HTTP.
         update_job(
             job_id,
             srt_url=srt_url,
             status="srt_ready",
+            language=detected_lang,
+            engine=engine,
         )
         
         log.info(f"✅ SRT ready for {job_id} (engine={engine})")

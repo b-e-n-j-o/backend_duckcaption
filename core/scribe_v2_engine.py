@@ -172,19 +172,19 @@ def transcribe_audio(
     
     with open(audio_path, "rb") as f:
         files = {"file": (audio_path.name, f, mime_type)}
-        data = {
-            "model_id": "scribe_v2",
-            "timestamps_granularity": "word",
-            "tag_audio_events": "true"
-        }
+        data = [
+            ("model_id", "scribe_v2"),
+            ("timestamps_granularity", "word"),
+            ("tag_audio_events", "true"),
+        ]
         
         if keyterms:
             valid_keyterms = [k.strip()[:50] for k in keyterms[:100] if k.strip()]
-            if valid_keyterms:
-                data["keyterms"] = json.dumps(valid_keyterms)
+            for term in valid_keyterms:
+                data.append(("keyterms", term))
         
         if language_code:
-            data["language_code"] = language_code
+            data.append(("language_code", language_code))
         
         response = requests.post(
             url,
@@ -408,6 +408,7 @@ def process_scribe_v2(
         detected_language = result.get("language_code", "unknown")
 
         if job_id:
+            from core.jobs import update_job
             eleven_cost = calculate_elevenlabs_transcription_cost(
                 transcription_duration_sec,
                 keyterms_enabled=bool(keyterms),
@@ -418,6 +419,13 @@ def process_scribe_v2(
                 f"(duration={eleven_cost['duration_sec']:.2f}s, "
                 f"base=${eleven_cost['base_cost']:.12f} @ ${eleven_cost['base_rate_per_hour_usd']}/h, "
                 f"keyterm=${eleven_cost['keyterm_cost']:.12f} @ ${eleven_cost['keyterm_rate_per_hour_usd']}/h)"
+            )
+            update_job(
+                job_id,
+                audio_duration_sec=round(transcription_duration_sec, 2),
+                segments_count=len(segments),
+                words_count=len([w for w in words if w.get("type") == "word"]),
+                keyterms=json.dumps(keyterms) if keyterms else None,
             )
 
         # Générer SRT avec split 2 lignes
