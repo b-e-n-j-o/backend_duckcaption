@@ -72,6 +72,8 @@ class SRTDirectTranslateRequest(BaseModel):
     method: str = "strict"  # "classic" (ancien) ou "strict" (v2 littéral)
     max_words: int | None = None
     max_chars: int | None = None
+    filename: str | None = "uploaded.srt"  # nom du fichier source (job dédié traduction)
+    persist: bool = True  # crée un job dédié + Storage (indépendant de la transcription)
 
 
 # ============================================================
@@ -302,25 +304,62 @@ def get_job_status(job_id: str):
 @router.post("/translate/{job_id}")
 def translate_srt_endpoint(job_id: str, request: TranslateRequest):
     """
-    Traduit le SRT en plusieurs langues.
-    
-    Methods:
-    - classic: Ancien traducteur (peut réarranger le contenu)
-    - strict: Nouveau traducteur v2 (traduction littérale, même structure)
+    Traduit le SRT d'un job source (transcription) vers une ou plusieurs langues.
+
+    Crée TOUJOURS un nouveau job dédié à la traduction (engine=translation_only),
+    lié au job source via parent_job_id. Le job de transcription n'est pas modifié.
     """
-    job = get_job(job_id)
-    if not job or not job.get("srt_url"):
+    source_job = get_job(job_id)
+    if not source_job or not source_job.get("srt_url"):
         return JSONResponse({"error": "SRT not ready"}, status_code=404)
 
+    translation_job_id = None
     try:
-        original_srt = requests.get(job["srt_url"]).text
+        original_srt = requests.get(source_job["srt_url"]).text
         translations = {}
+
+        source_name = source_job.get("filename") or "subtitles"
+        base_name = slugify_filename(os.path.splitext(source_name)[0])
+        translation_job = create_job(f"{base_name}_translation.srt")
+        translation_job_id = translation_job["id"]
+
+        # Copie du SRT source sur le job traduction + métadonnées
+        tmp_source = TMP_DIR / f"{translation_job_id}_source.srt"
+        tmp_source.write_text(original_srt, encoding="utf-8")
+        source_url = upload_file(
+            str(tmp_source),
+            f"{translation_job_id}/{base_name}_source.srt",
+        )
+        tmp_source.unlink(missing_ok=True)
+
+        translation_meta = {
+            "srt_url": source_url,
+            "status": "translating",
+            "engine": "translation_only",
+            "language": source_job.get("language"),
+            "parent_job_id": job_id,
+        }
+        try:
+            update_job(translation_job_id, **translation_meta)
+        except Exception:
+            # Compat si parent_job_id pas encore migré en base
+            translation_meta.pop("parent_job_id", None)
+            update_job(translation_job_id, **translation_meta)
+            log.warning("⚠️ parent_job_id non persisté (colonne absente?)")
+
+        log.info(
+            f"🆕 Job traduction {translation_job_id} créé "
+            f"(source transcription={job_id})"
+        )
 
         for lang in request.languages:
             if lang not in SUPPORTED_LANGUAGES:
                 continue
 
-            log.info(f"🌍 Translating {job_id} to {lang} (method={request.method})")
+            log.info(
+                f"🌍 Translating source={job_id} → job={translation_job_id} "
+                f"lang={lang} (method={request.method})"
+            )
 
             if request.method == "strict":
                 translated = translate_srt_v2(
@@ -330,9 +369,11 @@ def translate_srt_endpoint(job_id: str, request: TranslateRequest):
                     max_words=request.max_words,
                     max_chars=request.max_chars,
                 )
-                # Coût traduction strict (estimateur léger à partir du contenu)
                 try:
-                    from core.token_counter import calculate_model_text_costs, add_cost_component_to_job
+                    from core.token_counter import (
+                        calculate_model_text_costs,
+                        add_cost_component_to_job,
+                    )
                     input_tokens = len(original_srt.split()) * 1.3
                     output_tokens = len(translated.split()) * 1.3
                     costs = calculate_model_text_costs(
@@ -340,56 +381,95 @@ def translate_srt_endpoint(job_id: str, request: TranslateRequest):
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                     )
-                    add_cost_component_to_job(job_id, "translation_gemini", costs["total"])
+                    add_cost_component_to_job(
+                        translation_job_id, "translation_gemini", costs["total"]
+                    )
                     log.info(
                         f"💰 Translation cost ({lang}, strict): ${costs['total']:.12f} "
                         f"(estimated tokens in={int(input_tokens)}, out={int(output_tokens)})"
                     )
                 except Exception as cost_err:
-                    log.warning(f"⚠️ Translation cost tracking failed ({lang}, strict): {cost_err}")
+                    log.warning(
+                        f"⚠️ Translation cost tracking failed ({lang}, strict): {cost_err}"
+                    )
             else:
                 translated = translate_srt_segments(
                     original_srt,
                     lang,
-                    job_id,
+                    translation_job_id,
                 )
 
-            tmp_path = TMP_DIR / f"{job_id}_{lang}.srt"
+            tmp_path = TMP_DIR / f"{translation_job_id}_{lang}.srt"
             tmp_path.write_text(translated, encoding="utf-8")
-
-            base_name = os.path.splitext(job.get("filename", "subtitles"))[0]
-            dest = f"{job_id}/{base_name}_{lang}.srt"
+            dest = f"{translation_job_id}/{base_name}_{lang}.srt"
             url = upload_file(str(tmp_path), dest)
             translations[lang] = url
+            tmp_path.unlink(missing_ok=True)
 
-            tmp_path.unlink()
-
-        update_job(job_id, translations=json.dumps(translations))
+        update_job(
+            translation_job_id,
+            translations=json.dumps(translations),
+            status="translated",
+        )
 
         return {
-            "job_id": job_id,
-            "translations": translations
+            "job_id": translation_job_id,
+            "source_job_id": job_id,
+            "translations": translations,
         }
 
     except Exception as e:
         log.error(f"Translation failed: {e}")
+        if translation_job_id:
+            update_job(translation_job_id, status="error", error=str(e))
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.post("/translate_srt_content")
 def translate_srt_content(request: SRTDirectTranslateRequest):
     """
-    Traduit un contenu SRT brut sans job ni stockage Supabase.
-    Retourne un dictionnaire {lang: srt_traduit}.
+    Traduit un contenu SRT brut fourni par le client (sans transcription préalable).
+
+    Par défaut (persist=True):
+    - crée un NOUVEAU job dédié (indépendant d'une transcription)
+    - upload le SRT source + les SRT traduits sur Storage
+    - persiste translations / cost_usd / engine sur ce job
+
+    Retourne toujours {lang: contenu_srt} pour compatibilité frontend/plugin.
     """
+    job_id = None
     try:
-        translations = {}
+        translations_content = {}
+        translations_urls = {}
+        source_url = None
+
+        if request.persist:
+            filename = request.filename or "uploaded.srt"
+            job = create_job(filename)
+            job_id = job["id"]
+
+            tmp_source = TMP_DIR / f"{job_id}_source.srt"
+            tmp_source.write_text(request.srt, encoding="utf-8")
+            base_name = slugify_filename(os.path.splitext(filename)[0])
+            source_url = upload_file(str(tmp_source), f"{job_id}/{base_name}_source.srt")
+            tmp_source.unlink(missing_ok=True)
+
+            update_job(
+                job_id,
+                srt_url=source_url,
+                status="translating",
+                engine="translation_only",
+            )
+            log.info(f"🆕 Job traduction dédié créé: {job_id}")
 
         for lang in request.languages:
             if lang not in SUPPORTED_LANGUAGES:
                 continue
 
-            log.info(f"🌍 Direct SRT translation to {lang} (method={request.method})")
+            log.info(
+                f"🌍 Direct SRT translation to {lang} "
+                f"(method={request.method}, job={job_id or 'no-persist'})"
+            )
 
             if request.method == "strict":
                 translated = translate_srt_v2(
@@ -399,22 +479,62 @@ def translate_srt_content(request: SRTDirectTranslateRequest):
                     max_words=request.max_words,
                     max_chars=request.max_chars,
                 )
+                if job_id:
+                    try:
+                        from core.token_counter import (
+                            calculate_model_text_costs,
+                            add_cost_component_to_job,
+                        )
+                        input_tokens = len(request.srt.split()) * 1.3
+                        output_tokens = len(translated.split()) * 1.3
+                        costs = calculate_model_text_costs(
+                            "gemini-3.1-flash-lite",
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                        )
+                        add_cost_component_to_job(
+                            job_id, "translation_gemini", costs["total"]
+                        )
+                    except Exception as cost_err:
+                        log.warning(f"⚠️ Translation cost tracking failed: {cost_err}")
             else:
                 translated = translate_srt_segments(
                     request.srt,
                     lang,
-                    job_id=None,
+                    job_id=job_id,
                 )
 
-            translations[lang] = translated
+            translations_content[lang] = translated
+
+            if job_id:
+                tmp_path = TMP_DIR / f"{job_id}_{lang}.srt"
+                tmp_path.write_text(translated, encoding="utf-8")
+                base_name = slugify_filename(
+                    os.path.splitext(request.filename or "uploaded")[0]
+                )
+                url = upload_file(str(tmp_path), f"{job_id}/{base_name}_{lang}.srt")
+                translations_urls[lang] = url
+                tmp_path.unlink(missing_ok=True)
+
+        if job_id:
+            update_job(
+                job_id,
+                translations=json.dumps(translations_urls),
+                status="translated",
+            )
 
         return {
             "method": request.method,
-            "translations": translations
+            "job_id": job_id,
+            "srt_url": source_url,
+            "translation_urls": translations_urls,
+            "translations": translations_content,  # contenu brut (compat UI)
         }
 
     except Exception as e:
         log.error(f"Direct SRT translation failed: {e}")
+        if job_id:
+            update_job(job_id, status="error", error=str(e))
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
